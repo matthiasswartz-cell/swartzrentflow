@@ -1,0 +1,211 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════════════════════════
+// MULTI-TENANT: Every table has tenantId
+// ═══════════════════════════════════════
+
+model Tenant {
+  id                 String   @id @default(cuid())
+  name               String   // "Acme Rent-to-Own"
+  slug               String   @unique // "acme-rto" (used in subdomain)
+  phone              String?
+  email              String?
+  address            String?
+  city               String?
+  state              String?
+  zip                String?
+  logoUrl            String?
+  primaryColor       String   @default("#6366F1")
+  defaultTaxRate     Decimal  @default(0) @db.Decimal(5, 3)
+  stripeAccountId    String?  // Stripe Connect account
+  subscriptionPlan   String   @default("starter") // starter, professional, enterprise
+  subscriptionStatus String   @default("active")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  users       User[]
+  customers   Customer[]
+  inventory   Inventory[]
+  contracts   Contract[]
+  payments    Payment[]
+  iotDevices  IotDevice[]
+  activityLog ActivityLog[]
+}
+
+model User {
+  id       String @id @default(cuid())
+  tenantId String
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  clerkId  String @unique // Clerk auth user ID
+  email    String
+  name     String
+  role     String @default("cashier") // owner, manager, cashier, driver, repo_agent
+
+  payments    Payment[]   @relation("ProcessedBy")
+  activityLog ActivityLog[]
+  createdAt   DateTime    @default(now())
+
+  @@index([tenantId])
+  @@index([clerkId])
+}
+
+model Customer {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name           String
+  phone          String?
+  email          String?
+  address        String?
+  city           String?
+  county         String?  // for tax lookup
+  state          String?
+  zip            String?
+  ssnEncrypted   String?  // AES-256 encrypted
+  dob            DateTime?
+  references     Json?    // [{name, relation, phone}]
+  status         String   @default("active") // active, delinquent, collections, closed
+  autopayEnabled Boolean  @default(false)
+  paymentMethodId String? // Stripe payment method
+  paymentDisplay  String? // "ACH •6612" or "Visa •4521"
+  taxRate        Decimal  @default(0) @db.Decimal(5, 3)
+  riskScore      Int      @default(50) // 0-100
+  rating         String   @default("B") // A+ through F
+  daysLate       Int      @default(0)
+  balance        Decimal  @default(0) @db.Decimal(10, 2)
+  hvacMode       String?  // null, "Safe Mode"
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  contracts Contract[]
+  payments  Payment[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, name])
+}
+
+model Inventory {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name          String
+  category      String   // electronics, furniture, appliances, hvac
+  serialNumber  String?
+  cost          Decimal  @db.Decimal(10, 2)
+  cashPrice     Decimal  @default(0) @db.Decimal(10, 2)
+  rbv           Decimal  @default(0) @db.Decimal(10, 2) // remaining book value
+  depreciation  Decimal  @default(0) @db.Decimal(10, 2)
+  depMethod     String   @default("macrs") // macrs, straight_line, income_forecast, double_declining, sum_of_years
+  agent         String   @default("rental") // rental, retail
+  status        String   @default("available") // available, on_contract, repo_pending, returned, sold
+  iotEnabled    Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  contracts  Contract[]
+  iotDevice  IotDevice?
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([tenantId, category])
+}
+
+model Contract {
+  id            String   @id @default(cuid())
+  tenantId      String
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId    String
+  customer      Customer @relation(fields: [customerId], references: [id])
+  inventoryId   String
+  inventory     Inventory @relation(fields: [inventoryId], references: [id])
+  type          String   @default("rto") // rto, lease, rent_to_rent, retail, installment, revolving
+  monthlyAmount Decimal  @db.Decimal(10, 2)
+  termMonths    Int
+  paymentsMade  Int      @default(0)
+  dueDate       DateTime
+  status        String   @default("active") // active, late, collections, paid_out, returned, repo
+  taxAmount     Decimal  @default(0) @db.Decimal(10, 2)
+  epoAmount     Decimal  @default(0) @db.Decimal(10, 2)
+  lateFee       Decimal  @default(0) @db.Decimal(10, 2)
+  daysLate      Int      @default(0)
+  sameCashDate  DateTime? // same-as-cash expiration
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  payments Payment[]
+
+  @@index([tenantId])
+  @@index([tenantId, status])
+  @@index([customerId])
+}
+
+model Payment {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId      String
+  customer        Customer @relation(fields: [customerId], references: [id])
+  contractId      String
+  contract        Contract @relation(fields: [contractId], references: [id])
+  amount          Decimal  @db.Decimal(10, 2)
+  method          String   // ach, card, cash, check
+  type            String   @default("manual") // manual, autopay, webpay, phone_pay
+  stripePaymentId String?
+  processedById   String?
+  processedBy     User?    @relation("ProcessedBy", fields: [processedById], references: [id])
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, createdAt])
+  @@index([customerId])
+  @@index([contractId])
+}
+
+model IotDevice {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  inventoryId     String   @unique
+  inventory       Inventory @relation(fields: [inventoryId], references: [id])
+  deviceSerial    String   @unique
+  simIccid        String?  // SIM card ID
+  connectionType  String   @default("LTE Cat-M1")
+  signalStrength  Int      @default(-70) // dBm
+  firmwareVersion String   @default("v2.4.1")
+  mode            String   @default("active") // active, safe_mode — NEVER "disabled"
+  currentTemp     Decimal? @db.Decimal(5, 1)
+  setTemp         Decimal? @db.Decimal(5, 1)
+  safeModeCoolMax Int      @default(85) // degrees F
+  safeModeHeatMax Int      @default(55) // degrees F
+  lastHeartbeat   DateTime @default(now())
+  tamperAlert     Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([tenantId])
+  @@index([deviceSerial])
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String   // human-readable description
+  type       String   // payment, sms, iot, legal, accounting, system
+  entityType String?  // customer, contract, inventory
+  entityId   String?
+  createdAt  DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+}
