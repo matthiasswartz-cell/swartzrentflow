@@ -5,19 +5,18 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "RentFlow Pro",
-  description: "Complete RTO SaaS Platform",
+  description: "Rent-to-own operations — demo and staging",
+  robots: { index: false, follow: false },
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <ClerkProvider appearance={{ baseTheme: dark }}>
-      <html lang="en">
-        <body className="antialiased">{children}</body>
-      </html>
-    </ClerkProvider>
+    <html lang="en">
+      <body className="antialiased">
+        <ClerkProvider appearance={{ baseTheme: dark }} signInUrl="/sign-in" signUpUrl="/sign-up" signInFallbackRedirectUrl="/dashboard" signUpFallbackRedirectUrl="/onboarding">
+          {children}
+        </ClerkProvider>
+      </body>
+    </html>
   );
 }
